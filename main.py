@@ -1,15 +1,18 @@
 import os
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from fastapi.middleware.cors import CORSMiddleware
 from utils.document_loader import load_and_embed_document
-from utils.qa_chain import get_answer_for_query
+from utils.qa_chain import get_answer
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 
 # Load environment variables
 load_dotenv()
+
+# Get allowed origins from environment variable or use default
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:8080,http://localhost:8081,http://localhost:3000").split(",")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,10 +32,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware
+# Add CORS middleware with environment-based configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust this in production
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,6 +48,7 @@ class QuestionRequest(BaseModel):
 # Response model
 class QuestionResponse(BaseModel):
     answer: str
+    sources: Optional[List[str]] = None
     error: Optional[str] = None
 
 @app.post("/ask", response_model=QuestionResponse)
@@ -53,8 +57,10 @@ async def ask_question(request: QuestionRequest):
         return QuestionResponse(answer="", error="Question cannot be empty.")
     
     try:
-        answer = get_answer_for_query(request.question)
-        return QuestionResponse(answer=answer)
+        result = get_answer(request.question)
+        if "error" in result:
+            return QuestionResponse(answer="", error=result["error"])
+        return QuestionResponse(answer=result["answer"], sources=result["sources"])
     except Exception as e:
         # Log the error (in production, use a proper logging system)
         print(f"Error processing question: {str(e)}")

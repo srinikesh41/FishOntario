@@ -5,7 +5,7 @@ from typing import List
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 
 # Load environment variables
 load_dotenv()
@@ -35,9 +35,18 @@ def load_and_split_document() -> List:
     
     # Split the documents into smaller chunks
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", " ", ""],
+        chunk_size=500,
+        chunk_overlap=100,
+        separators=[
+            "\n\n",  # Double line breaks often separate sections
+            "\nZone ", # Zone headers
+            "\nSeason: ", # Season information
+            "\nLimits: ", # Limit information
+            "\n", # Single line breaks
+            ". ",  # Sentences
+            " ",   # Words
+            ""     # Characters
+        ],
         length_function=len,
     )
     
@@ -59,14 +68,15 @@ def load_and_embed_document():
     # Load and split the document
     split_docs = load_and_split_document()
     
-    # Create embeddings and vector store
+    # Create embeddings
     embeddings = OpenAIEmbeddings()
+    
+    # Create vector store
     vector_store = Chroma.from_documents(
         documents=split_docs,
         embedding=embeddings,
         persist_directory=CHROMA_PERSIST_DIRECTORY
     )
-    vector_store.persist()
     
     print(f"Vector store created successfully with {len(split_docs)} document chunks")
     return vector_store
@@ -75,6 +85,7 @@ def get_vector_store():
     """Get the vector store for querying"""
     check_openai_api_key()
     
+    # Create embeddings
     embeddings = OpenAIEmbeddings()
     
     # Load the existing vector store
