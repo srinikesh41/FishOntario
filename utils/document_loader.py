@@ -10,6 +10,7 @@ import json
 import numpy as np
 import requests
 from pathlib import Path
+from functools import lru_cache
 
 # Load environment variables
 load_dotenv()
@@ -17,7 +18,32 @@ load_dotenv()
 # Constants
 PDF_URL = os.environ.get('PDF_URL', 'https://files.ontario.ca/mnr-2025-fishing-regulations-summary-en-2024-12-09_0.pdf')
 EMBEDDINGS_DIR = os.path.join(os.getcwd(), 'tmp')
-EMBEDDINGS_PATH = os.path.join(EMBEDDINGS_DIR, 'embeddings.json')
+EMBEDDINGS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "embeddings.json")
+
+# --- In-memory cache for the data ---
+_embedding_data = {}
+
+@lru_cache(maxsize=None)
+def _load_embedding_data():
+    """Loads the pre-computed embeddings and texts from the JSON file."""
+    global _embedding_data
+    if not _embedding_data:
+        if not os.path.exists(EMBEDDINGS_PATH):
+            print(f"FATAL: Embeddings file not found at {EMBEDDINGS_PATH}.")
+            print("Please run the 'generate_embeddings.py' script first.")
+            sys.exit(1)
+        try:
+            with open(EMBEDDINGS_PATH, 'r') as f:
+                data = json.load(f)
+            
+            _embedding_data['embeddings'] = np.array(data['embeddings'])
+            _embedding_data['documents'] = [Document(page_content=text) for text in data['texts']]
+            
+            print(f"Successfully loaded {_embedding_data['embeddings'].shape[0]} documents from cache.")
+        except (IOError, json.JSONDecodeError) as e:
+            print(f"FATAL: Could not read or parse embeddings file: {e}")
+            sys.exit(1)
+    return _embedding_data
 
 def ensure_temp_dir():
     """Ensure temporary directory exists"""
@@ -116,35 +142,18 @@ def load_and_embed_document():
             'texts': [doc.page_content for doc in split_docs]
         }, f)
 
-def get_relevant_documents(query: str, k: int = 5):
-    """Get the most relevant documents for a query"""
-    global _embeddings, _documents
+def get_relevant_documents(query: str, k: int = 5) -> List[Document]:
+    """
+    Gets the most relevant documents for a query using pre-computed embeddings.
+    """
+    data = _load_embedding_data()
     
-    # Load embeddings if not loaded
-    if _embeddings is None or _documents is None:
-        if os.path.exists(EMBEDDINGS_PATH):
-            with open(EMBEDDINGS_PATH, 'r') as f:
-                data = json.load(f)
-                stored_embeddings = data['embeddings']
-                stored_texts = data['texts']
-                _embeddings = OpenAIEmbeddings()
-                _documents = [Document(page_content=text) for text in stored_texts]
-        else:
-            load_and_embed_document()
+    query_embedding = OpenAIEmbeddings().embed_query(query)
     
-    # Get query embedding
-    query_embedding = _embeddings.embed_query(query)
+    # Calculate dot product similarity
+    similarities = np.dot(data['embeddings'], query_embedding)
     
-    # Calculate similarities
-    similarities = []
-    with open(EMBEDDINGS_PATH, 'r') as f:
-        data = json.load(f)
-        stored_embeddings = data['embeddings']
-        
-    for doc_embedding in stored_embeddings:
-        similarity = np.dot(query_embedding, doc_embedding)
-        similarities.append(similarity)
-    
-    # Get top k most similar documents
+    # Get top k indices
     top_k_indices = np.argsort(similarities)[-k:][::-1]
-    return [_documents[i] for i in top_k_indices] 
+    
+    return [data['documents'][i] for i in top_k_indices] 

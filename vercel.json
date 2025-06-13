@@ -3,13 +3,13 @@
   "builds": [
     {
       "src": "main.py",
-      "use": "@vercel/python",
-      "config": {
-        "installCommand": "pip install --upgrade pip && pip install -e ."
-      }
+      "use": "@vercel/python"
     }
   ],
   "routes": [
-    { "src": "/(.*)", "dest": "main.py" }
+    {
+      "src": "/(.*)",
+      "dest": "main.py"
+    }
   ]
 } 
