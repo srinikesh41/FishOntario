@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 load_dotenv()
 
 # Get allowed origins from environment variable or use default
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:8080,http://localhost:8081,http://localhost:3000").split(",")
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://fishontario-frontend.vercel.app,http://localhost:3000").split(",")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -73,6 +73,11 @@ async def ask_question(request: QuestionRequest):
 async def health_check():
     return {"status": "healthy"}
 
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Ontario Fishing Regulations API"}
+
+# Only run the server when running locally
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 
