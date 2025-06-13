@@ -5,7 +5,8 @@ from typing import List
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
-from langchain_chroma import Chroma
+import json
+import numpy as np
 
 # Load environment variables
 load_dotenv()
@@ -14,7 +15,7 @@ load_dotenv()
 REGULATIONS_PDF_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 
                                     "data", 
                                     "mnr-2025-fishing-regulations-summary-en-2024-12-09_0.pdf")
-CHROMA_PERSIST_DIRECTORY = os.environ.get("CHROMA_PERSIST_DIRECTORY", "./vector_db")
+EMBEDDINGS_PATH = "/tmp/embeddings.json"
 
 def check_openai_api_key():
     """Check if OpenAI API key is set"""
@@ -37,64 +38,71 @@ def load_and_split_document() -> List:
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=100,
-        separators=[
-            "\n\n",  # Double line breaks often separate sections
-            "\nZone ", # Zone headers
-            "\nSeason: ", # Season information
-            "\nLimits: ", # Limit information
-            "\n", # Single line breaks
-            ". ",  # Sentences
-            " ",   # Words
-            ""     # Characters
-        ],
+        separators=["\n\n", "\nZone ", "\nSeason: ", "\nLimits: ", "\n", ". ", " ", ""],
         length_function=len,
     )
     
     split_docs = text_splitter.split_documents(documents)
     return split_docs
 
+_embeddings = None
+_documents = None
+
 def load_and_embed_document():
-    """Load the document, split it and create a vector store"""
+    """Load the document, split it and create embeddings"""
+    global _embeddings, _documents
     check_openai_api_key()
-    
-    # Check if vector store exists
-    if os.path.exists(CHROMA_PERSIST_DIRECTORY) and len(os.listdir(CHROMA_PERSIST_DIRECTORY)) > 0:
-        print(f"Using existing vector store in {CHROMA_PERSIST_DIRECTORY}")
-        # We don't need to recreate it, just return
-        return
-    
-    print("Creating new vector store...")
     
     # Load and split the document
     split_docs = load_and_split_document()
+    _documents = split_docs
     
     # Create embeddings
     embeddings = OpenAIEmbeddings()
+    _embeddings = embeddings
     
-    # Create vector store
-    vector_store = Chroma.from_documents(
-        documents=split_docs,
-        embedding=embeddings,
-        persist_directory=CHROMA_PERSIST_DIRECTORY
-    )
+    # Generate embeddings for all documents
+    doc_embeddings = []
+    for doc in split_docs:
+        emb = embeddings.embed_query(doc.page_content)
+        doc_embeddings.append(emb)
     
-    print(f"Vector store created successfully with {len(split_docs)} document chunks")
-    return vector_store
+    # Save embeddings to file
+    with open(EMBEDDINGS_PATH, 'w') as f:
+        json.dump({
+            'embeddings': doc_embeddings,
+            'texts': [doc.page_content for doc in split_docs]
+        }, f)
 
-def get_vector_store():
-    """Get the vector store for querying"""
-    check_openai_api_key()
+def get_relevant_documents(query: str, k: int = 5):
+    """Get the most relevant documents for a query"""
+    global _embeddings, _documents
     
-    # Create embeddings
-    embeddings = OpenAIEmbeddings()
+    # Load embeddings if not loaded
+    if _embeddings is None or _documents is None:
+        if os.path.exists(EMBEDDINGS_PATH):
+            with open(EMBEDDINGS_PATH, 'r') as f:
+                data = json.load(f)
+                stored_embeddings = data['embeddings']
+                stored_texts = data['texts']
+                _embeddings = OpenAIEmbeddings()
+                _documents = [Document(page_content=text) for text in stored_texts]
+        else:
+            load_and_embed_document()
     
-    # Load the existing vector store
-    if not os.path.exists(CHROMA_PERSIST_DIRECTORY):
-        # If it doesn't exist yet, create it
-        return load_and_embed_document()
+    # Get query embedding
+    query_embedding = _embeddings.embed_query(query)
     
-    vector_store = Chroma(
-        persist_directory=CHROMA_PERSIST_DIRECTORY, 
-        embedding_function=embeddings
-    )
-    return vector_store 
+    # Calculate similarities
+    similarities = []
+    with open(EMBEDDINGS_PATH, 'r') as f:
+        data = json.load(f)
+        stored_embeddings = data['embeddings']
+        
+    for doc_embedding in stored_embeddings:
+        similarity = np.dot(query_embedding, doc_embedding)
+        similarities.append(similarity)
+    
+    # Get top k most similar documents
+    top_k_indices = np.argsort(similarities)[-k:][::-1]
+    return [_documents[i] for i in top_k_indices] 

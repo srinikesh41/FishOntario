@@ -1,8 +1,7 @@
-from langchain.chains import RetrievalQA
+from langchain.chains import LLMChain
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
-from utils.document_loader import get_vector_store
-import os
+from utils.document_loader import get_relevant_documents
 
 # Define the prompt template
 QA_PROMPT = """You are an expert assistant for answering questions about Ontario's 2025 Fishing Regulations.
@@ -28,55 +27,41 @@ Question: {question}
 
 Answer (be concise and specific):"""
 
-def get_qa_chain():
-    """Create a QA chain using the vector store"""
-    # Get the vector store
-    vector_store = get_vector_store()
-    
-    # Create a retriever from the vector store
-    retriever = vector_store.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": 5}
-    )
-    
-    # Create the prompt template
-    PROMPT = PromptTemplate(
-        template=QA_PROMPT,
-        input_variables=["context", "question"]
-    )
-    
-    # Create the chain
-    chain = RetrievalQA.from_chain_type(
-        llm=ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0
-        ),
-        chain_type="stuff",
-        retriever=retriever,
-        chain_type_kwargs={
-            "prompt": PROMPT,
-        },
-        return_source_documents=True
-    )
-    
-    return chain
-
 def get_answer(question: str) -> dict:
     """Get an answer to a question about fishing regulations"""
     try:
-        # Get the QA chain
-        chain = get_qa_chain()
+        # Get relevant documents
+        relevant_docs = get_relevant_documents(question, k=5)
+        
+        # Combine the relevant documents into context
+        context = "\n\n".join([doc.page_content for doc in relevant_docs])
+        
+        # Create the prompt template
+        PROMPT = PromptTemplate(
+            template=QA_PROMPT,
+            input_variables=["context", "question"]
+        )
+        
+        # Create the chain
+        llm = ChatOpenAI(
+            model="gpt-3.5-turbo",
+            temperature=0
+        )
+        
+        chain = LLMChain(
+            llm=llm,
+            prompt=PROMPT
+        )
         
         # Get the answer
-        result = chain.invoke({"query": question})
-        
-        # Extract the answer and sources
-        answer = result["result"]
-        sources = [doc.page_content for doc in result["source_documents"]]
+        result = chain.invoke({
+            "context": context,
+            "question": question
+        })
         
         return {
-            "answer": answer,
-            "sources": sources
+            "answer": result["text"],
+            "sources": [doc.page_content for doc in relevant_docs]
         }
     except Exception as e:
         print(f"Error in QA chain: {str(e)}")
