@@ -1,8 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_openai import ChatOpenAI
 import os
 from dotenv import load_dotenv
 
@@ -17,12 +16,13 @@ app = FastAPI(
 )
 
 # Configure CORS
+origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
 )
 
 class QuestionRequest(BaseModel):
@@ -30,29 +30,27 @@ class QuestionRequest(BaseModel):
 
 class QuestionResponse(BaseModel):
     answer: str
+    sources: List[str] = []
     error: Optional[str] = None
 
 @app.post("/ask", response_model=QuestionResponse)
 async def ask_question(request: QuestionRequest):
     try:
-        # Initialize ChatOpenAI
-        llm = ChatOpenAI(
-            model="gpt-3.5-turbo",
-            temperature=0
+        from utils.qa_chain import get_answer
+        
+        # Get answer using the QA chain
+        result = get_answer(request.question)
+        
+        if "error" in result:
+            return QuestionResponse(
+                answer="I apologize, but I encountered an error processing your question. Please try again.",
+                error=result["error"]
+            )
+        
+        return QuestionResponse(
+            answer=result["answer"],
+            sources=result.get("sources", [])
         )
-        
-        # Create a prompt that includes context about Ontario fishing regulations
-        prompt = f"""You are an expert on Ontario's fishing regulations. 
-        Answer the following question about fishing in Ontario:
-        
-        Question: {request.question}
-        
-        If you're not sure about the specific regulation, say so and recommend checking the official regulations."""
-        
-        # Get response from OpenAI
-        response = llm.invoke(prompt)
-        
-        return QuestionResponse(answer=response.content)
     except Exception as e:
         print(f"Error: {str(e)}")
         return QuestionResponse(
@@ -73,6 +71,10 @@ async def root():
         "docs": "/docs",
         "health": "/health"
     }
+
+# For Vercel deployment
+def handler(request):
+    return app
 
 # This block is for local development only
 if __name__ == "__main__":
